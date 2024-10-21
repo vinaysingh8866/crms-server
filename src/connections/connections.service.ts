@@ -33,13 +33,13 @@ export class ConnectionsService {
       }
 
       // Apply cursor pagination
-      const paginatedResult = cursorPaginate(
-        filteredConnections,
-        query,
-        this.idField,
-      );
+      // const paginatedResult = cursorPaginate(
+      //   filteredConnections,
+      //   query,
+      //   this.idField,
+      // );
 
-      return paginatedResult;
+      return filteredConnections;
     } catch (error) {
       this.logger.error(`Failed to retrieve connections.`);
       throw error;

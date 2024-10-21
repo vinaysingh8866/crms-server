@@ -7,6 +7,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { OpenId4VciResolvedCredentialOffer } from '@credo-ts/openid4vc';
 
 export class ReceiveInvitationDto {
   @IsString()
@@ -116,3 +117,26 @@ export class SetupConnectionListenerDto {
   })
   outOfBandRecordId: string;
 }
+
+export class CreateCredentialOfferDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ApiProperty({
+    description: 'List of credential names to offer',
+    example: ['UniversityDegreeCredential'],
+  })
+  offerdCredentials: string[];
+}
+
+
+// @Body() credentialsString: string
+export class ResolveCredentialsDto {
+  @IsString()
+  @ApiProperty({
+    description: 'Stringified credentials',
+    example: 'credentialsString',
+  })
+  credentialsString: string;
+}
+
+
