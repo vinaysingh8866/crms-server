@@ -12,28 +12,13 @@ import {
   DidsModule,
   CredentialsModule,
   V2CredentialProtocol,
-  CredentialStateChangedEvent,
-  CredentialEventTypes,
-  CredentialState,
   ConsoleLogger,
   LogLevel,
   DidKey,
-  W3cCredential,
-  CredoError,
-  ClaimFormat,
-  W3cIssuer,
-  W3cCredentialSubject,
-  w3cDate,
-  parseDid,
-  DidsApi,
   KeyDidCreateOptions,
   KeyType,
   TypedArrayEncoder,
   VerificationMethod,
-  W3cJwtVerifiableCredential,
-  W3cJsonLdVerifiableCredential,
-  DifPresentationExchangeService,
-  DifPresentationExchangeDefinitionV2,
 } from "@credo-ts/core";
 import { HttpInboundTransport, agentDependencies } from "@credo-ts/node";
 import { AskarModule } from "@credo-ts/askar";
@@ -55,53 +40,18 @@ import {
 } from "@credo-ts/anoncreds";
 import { anoncreds } from "@hyperledger/anoncreds-nodejs";
 import {
-  OpenId4VcCredentialHolderBinding,
-  OpenId4VcCredentialHolderDidBinding,
-  OpenId4VciCredentialFormatProfile,
-  OpenId4VciCredentialRequestToCredentialMapper,
-  OpenId4VciCredentialSupportedWithId,
-  OpenId4VciResolvedCredentialOffer,
-  OpenId4VciSignCredential,
   OpenId4VcIssuerModule,
   OpenId4VcIssuerRecord,
-  OpenId4VcSiopResolvedAuthorizationRequest,
   OpenId4VcVerifierModule,
   OpenId4VcVerifierRecord,
 } from "@credo-ts/openid4vc";
+import express from "express";
 import { Router } from "express";
-export const universityDegreeCredential = {
-  id: "UniversityDegreeCredential",
-  format: OpenId4VciCredentialFormatProfile.JwtVcJson,
-  types: ["VerifiableCredential", "UniversityDegreeCredential"],
-} satisfies OpenId4VciCredentialSupportedWithId;
-
-export const openBadgeCredential = {
-  id: "OpenBadgeCredential",
-  format: OpenId4VciCredentialFormatProfile.JwtVcJson,
-  types: ["VerifiableCredential", "OpenBadgeCredential"],
-} satisfies OpenId4VciCredentialSupportedWithId;
-
-export const universityDegreeCredentialSdJwt = {
-  id: "UniversityDegreeCredential-sdjwt",
-  format: OpenId4VciCredentialFormatProfile.SdJwtVc,
-  vct: "UniversityDegreeCredential",
-} satisfies OpenId4VciCredentialSupportedWithId;
-
-export const credentialsSupported = [
-  universityDegreeCredential,
-  openBadgeCredential,
-  universityDegreeCredentialSdJwt,
-] satisfies OpenId4VciCredentialSupportedWithId[];
-
-function assertDidBasedHolderBinding(
-  holderBinding: OpenId4VcCredentialHolderBinding
-): asserts holderBinding is OpenId4VcCredentialHolderDidBinding {
-  if (holderBinding.method !== "did") {
-    throw new CredoError(
-      "Only did based holder bindings supported for this credential type"
-    );
-  }
-}
+import {
+  credentialRequestToCredentialMapper,
+  credentialsSupported,
+  setupCredentialListener,
+} from "src/common/utils/oid4vcSupport";
 
 @Injectable()
 export class CredoService {
@@ -116,12 +66,18 @@ export class CredoService {
   public verificationMethod!: VerificationMethod;
   constructor(private readonly qrCodeService: QrcodeService) {}
   public verifierRecord!: OpenId4VcVerifierRecord;
-
-  async createAgent(name: string, endpoint: string, port: number) {
+  private app: any;
+  async createAgent(
+    name: string,
+    endpoint: string,
+    port: number,
+    oid4vcPort: number
+  ) {
     if (this.agents.has(name)) {
       this.logger.log(`Agent ${name} is already initialized on port ${port}`);
       return this.agents.get(name);
     }
+    this.app = express();
 
     // Agent configuration
     this.config = {
@@ -133,8 +89,8 @@ export class CredoService {
       endpoints: [`${endpoint}:${port}`],
       logger: new ConsoleLogger(LogLevel.info),
     };
-    const router = Router();
-
+    const verifierRouter = Router();
+    const issuerRouter = Router();
     this.agent = new Agent({
       config: this.config,
       dependencies: agentDependencies,
@@ -161,108 +117,17 @@ export class CredoService {
           resolvers: [new IndyVdrIndyDidResolver()],
         }),
         openId4VcVerifier: new OpenId4VcVerifierModule({
-          baseUrl: "http://localhost:4000/siop",
-          router: router,
+          baseUrl: `http://${endpoint}:${oid4vcPort}/siop`, //"http://localhost:2000/siop",
+          router: verifierRouter,
         }),
         openId4VcIssuer: new OpenId4VcIssuerModule({
-          baseUrl: "http://localhost:2000/oid4vci",
-          router: router,
+          baseUrl: `http://${endpoint}:${oid4vcPort}/oid4vci`,
+          router: issuerRouter,
 
           endpoints: {
             credential: {
-              credentialRequestToCredentialMapper: async ({
-                // agent context for the current wallet / tenant
-                agentContext,
-                // the credential offer related to the credential request
-                credentialOffer,
-                // the received credential request
-                credentialRequest,
-                // the list of credentialsSupported entries
-                credentialsSupported,
-                // the cryptographic binding provided by the holder in the credential request proof
-                holderBinding,
-                // the issuance session associated with the credential request and offer
-                issuanceSession,
-                credentialConfigurationIds,
-              }): Promise<OpenId4VciSignCredential> => {
-                // find the first did:key did in our wallet. You can modify this based on your needs
-                const didsApi = agentContext.dependencyManager.resolve(DidsApi);
-                const [didKeyDidRecord] = await didsApi.getCreatedDids({
-                  method: "key",
-                });
-                if (!didKeyDidRecord) {
-                  throw new Error("No did:key did found in wallet");
-                }
-
-                const didKey = DidKey.fromDid(didKeyDidRecord.did);
-                const didUrl = `${didKey.did}#${didKey.key.fingerprint}`;
-                const issuerDidKey = didKey;
-                const credentialConfigurationId = credentialConfigurationIds[0];
-                if (
-                  credentialConfigurationId === universityDegreeCredential.id
-                ) {
-                  assertDidBasedHolderBinding(holderBinding);
-
-                  return {
-                    credentialSupportedId: universityDegreeCredential.id,
-                    format: ClaimFormat.JwtVc,
-                    credential: new W3cCredential({
-                      type: universityDegreeCredential.types,
-                      issuer: new W3cIssuer({
-                        id: issuerDidKey.did,
-                      }),
-                      credentialSubject: new W3cCredentialSubject({
-                        id: parseDid(holderBinding.didUrl).did,
-                      }),
-                      issuanceDate: w3cDate(Date.now()),
-                    }),
-                    verificationMethod: `${issuerDidKey.did}#${issuerDidKey.key.fingerprint}`,
-                  };
-                }
-
-                if (credentialConfigurationId === openBadgeCredential.id) {
-                  assertDidBasedHolderBinding(holderBinding);
-
-                  return {
-                    format: ClaimFormat.JwtVc,
-                    credentialSupportedId: openBadgeCredential.id,
-                    credential: new W3cCredential({
-                      type: openBadgeCredential.types,
-                      issuer: new W3cIssuer({
-                        id: issuerDidKey.did,
-                      }),
-                      credentialSubject: new W3cCredentialSubject({
-                        id: parseDid(holderBinding.didUrl).did,
-                      }),
-                      issuanceDate: w3cDate(Date.now()),
-                    }),
-                    verificationMethod: `${issuerDidKey.did}#${issuerDidKey.key.fingerprint}`,
-                  };
-                }
-
-                if (
-                  credentialConfigurationId ===
-                  universityDegreeCredentialSdJwt.id
-                ) {
-                  return {
-                    credentialSupportedId: universityDegreeCredentialSdJwt.id,
-                    format: ClaimFormat.SdJwtVc,
-                    payload: {
-                      vct: universityDegreeCredentialSdJwt.vct,
-                      university: "innsbruck",
-                      degree: "bachelor",
-                    },
-                    holder: holderBinding,
-                    issuer: {
-                      method: "did",
-                      didUrl: `${issuerDidKey.did}#${issuerDidKey.key.fingerprint}`,
-                    },
-                    disclosureFrame: { _sd: ["university", "degree"] },
-                  };
-                }
-
-                throw new Error("Invalid request");
-              },
+              credentialRequestToCredentialMapper:
+                credentialRequestToCredentialMapper,
             },
           },
         }),
@@ -289,13 +154,21 @@ export class CredoService {
     this.agent.registerInboundTransport(
       new HttpInboundTransport({ port: port })
     );
+    this.app.use("/siop", verifierRouter);
+    this.app.use("/oid4vci", issuerRouter);
+    this.app.listen(2000, () => {
+      console.log("Oidc Server listening on port 3000");
+    });
 
     // Initialize the agent
     try {
       await this.agent.initialize();
-      await this.agent.modules.openId4VcIssuer.createIssuer({
-        credentialsSupported,
-      })
+      this.issuerRecord = await this.agent.modules.openId4VcIssuer.createIssuer(
+        {
+          credentialsSupported,
+        }
+      );
+
       const didCreateResult = await this.agent.dids.create<KeyDidCreateOptions>(
         {
           method: "key",
@@ -313,6 +186,7 @@ export class CredoService {
       if (this.did) {
         this.didKey = DidKey.fromDid(this.did);
       } else {
+        this.logger.log("No DID found, using default");
         this.didKey = DidKey.fromDid(
           "did:key:z6MktiQQEqm2yapXBDt1WEVB3dqgvyzi96FuFANYmrgTrKV9"
         );
@@ -326,9 +200,7 @@ export class CredoService {
         ]);
       console.log(verificationMethod, "verificationMethodverificationMethod");
       if (!verificationMethod) {
-        //         VerificationMethod {
-
-        // }
+        this.logger.log("No verification method found, using default");
         this.verificationMethod = new VerificationMethod({
           id: "did:key:z6MkrzQPBr4pyqC776KKtrz13SchM5ePPbssuPuQZb5t4uKQ#z6MkrzQPBr4pyqC776KKtrz13SchM5ePPbssuPuQZb5t4uKQ",
           type: "Ed25519VerificationKey2018",
@@ -358,105 +230,6 @@ export class CredoService {
       throw e;
     }
     return this.agent;
-  }
-
-  public async createOID4VCCredentialOffer(
-    agentName: string,
-    offeredCredentials: string[]
-  ) {
-    const agent: Agent | undefined = this.agent;
-    if (!agent) {
-      throw new Error(`Agent ${agentName} not found`);
-    }
-    console.log(this.issuerRecord)
-    const { credentialOffer } =
-      await agent.modules.openId4VcIssuer.createCredentialOffer({
-        issuerId: this.issuerRecord.issuerId,
-        offeredCredentials,
-        preAuthorizedCodeFlowConfig: { userPinRequired: false },
-      });
-
-    return credentialOffer;
-  }
-
-  public async resolveCredentialOffer(
-    credentialOffer: string,
-    agentName: string
-  ) {
-    const agent = this.getAgentByName(agentName);
-    if (!agent) {
-      throw new Error(`Agent ${agentName} not found`);
-    }
-    return await agent.modules.openId4VcHolder.resolveCredentialOffer(
-      credentialOffer
-    );
-  }
-
-  public async resolveProofRequest(proofRequest: string, agentName: string) {
-    const agent = this.getAgentByName(agentName);
-    if (!agent) {
-      throw new Error(`Agent ${agentName} not found`);
-    }
-    const resolvedProofRequest =
-      await agent.modules.openId4VcHolder.resolveSiopAuthorizationRequest(
-        proofRequest
-      );
-
-    return resolvedProofRequest;
-  }
-  public async acceptPresentationRequest(
-    resolvedPresentationRequest: OpenId4VcSiopResolvedAuthorizationRequest,
-    agentName: string
-  ) {
-    const agent = this.getAgentByName(agentName);
-    if (!agent) {
-      throw new Error(`Agent ${agentName} not found`);
-    }
-    const presentationExchangeService = agent.dependencyManager.resolve(
-      DifPresentationExchangeService
-    );
-
-    if (!resolvedPresentationRequest.presentationExchange) {
-      throw new Error(
-        "Missing presentation exchange on resolved authorization request"
-      );
-    }
-
-    const submissionResult =
-      await this.agent.modules.openId4VcHolder.acceptSiopAuthorizationRequest({
-        authorizationRequest: resolvedPresentationRequest.authorizationRequest,
-        presentationExchange: {
-          credentials: presentationExchangeService.selectCredentialsForRequest(
-            resolvedPresentationRequest.presentationExchange
-              .credentialsForRequest
-          ),
-        },
-      });
-
-    return submissionResult.serverResponse;
-  }
-
-  public async createProofRequest(
-    presentationDefinition: DifPresentationExchangeDefinitionV2,
-    agentName: string
-  ) {
-    const agent = this.getAgentByName(agentName);
-    if (!agent) {
-      throw new Error(`Agent ${agentName} not found`);
-    }
-    const { authorizationRequest } =
-      await agent.modules.openId4VcVerifier.createAuthorizationRequest({
-        requestSigner: {
-          method: "did",
-          didUrl: this.verificationMethod.id,
-        },
-        verifierId: this.verifierRecord.verifierId,
-        presentationExchange: {
-          definition: presentationDefinition,
-        },
-      });
-
-    return authorizationRequest;
   }
 
   // This method will create an invitation using the legacy method according to 0160: Connection Protocol.
@@ -508,17 +281,6 @@ export class CredoService {
     }
   }
 
-  public async createCredentialOffer(offeredCredentials: string[]) {
-    const { credentialOffer } =
-      await this.agent.modules.openId4VcIssuer.createCredentialOffer({
-        issuerId: this.issuerRecord.issuerId,
-        offeredCredentials,
-        preAuthorizedCodeFlowConfig: { userPinRequired: false },
-      });
-
-    return credentialOffer;
-  }
-
   async receiveInvitation(agentName: string, invitationUrl: string) {
     const agent: Agent | undefined = this.getAgentByName(agentName);
     if (agent) {
@@ -562,7 +324,7 @@ export class CredoService {
 
           // Set up credential listener
           console.log("setupCredentialListener");
-          this.setupCredentialListener(agent);
+          setupCredentialListener(agent);
 
           // We exit the flow
           // process.exit(0);
@@ -607,49 +369,5 @@ export class CredoService {
       });
 
     return credentialExchangeRecord;
-  }
-
-  setupCredentialListener(agent: Agent) {
-    agent.events.on<CredentialStateChangedEvent>(
-      CredentialEventTypes.CredentialStateChanged,
-      async ({ payload }) => {
-        this.logger.log(
-          `Credential state changed: ${payload.credentialRecord.id}, state: ${payload.credentialRecord.state}`
-        );
-
-        switch (payload.credentialRecord.state) {
-          case CredentialState.OfferSent:
-            this.logger.log(`Credential offer sent to holder.`);
-            break;
-          case CredentialState.RequestReceived:
-            this.logger.log(`Credential request received from holder.`);
-            // Automatically respond to credential request if desired
-            await this.agent.credentials.acceptRequest({
-              credentialRecordId: payload.credentialRecord.id,
-            });
-            break;
-          case CredentialState.CredentialIssued: // Adjusted to match your enum
-            this.logger.log(`Credential issued to holder.`);
-            // Handle the issuance process or update state as necessary
-            break;
-          case CredentialState.Done:
-            this.logger.log(
-              `Credential ${payload.credentialRecord.id} is accepted by the wallet`
-            );
-            // Add your custom business logic here, e.g., updating your database or notifying a service
-            break;
-          case CredentialState.Declined:
-            this.logger.log(
-              `Credential ${payload.credentialRecord.id} is rejected by the wallet`
-            );
-            // Handle rejection if needed
-            break;
-          default:
-            this.logger.log(
-              `Unhandled credential state: ${payload.credentialRecord.state}`
-            );
-        }
-      }
-    );
   }
 }

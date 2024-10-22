@@ -264,13 +264,13 @@ export class ConnectionsController {
   /**
    * Create agent.
    */
-  @Post('create-agent/:name/:endpoint/:port')
-  @ApiOperation({ summary: 'Create Agent' })
-  @ApiOkResponse({ description: 'Successfully created agent' })
-  async createAgent(@Param() params: CreateAgentDto) {
-    const { name, endpoint, port } = params;
-    await this.credoService.createAgent(name, endpoint, port);
-  }
+  // @Post('create-agent/:name/:endpoint/:port')
+  // @ApiOperation({ summary: 'Create Agent' })
+  // @ApiOkResponse({ description: 'Successfully created agent' })
+  // async createAgent(@Param() params: CreateAgentDto) {
+  //   const { name, endpoint, port } = params;
+  //   await this.credoService.createAgent(name, endpoint, port);
+  // }
 
   /**
    * Delete connection by ID.

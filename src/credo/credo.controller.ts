@@ -19,7 +19,8 @@ export class CredoController {
     await this.credoService.createAgent(
       createAgentDto.name,
       createAgentDto.endpoint,
-      createAgentDto.port
+      createAgentDto.port,
+      createAgentDto.oid4vcPort
     )
     this.agentId = createAgentDto.name;
     return 'Agent started';
@@ -29,22 +30,6 @@ export class CredoController {
   @Get('invite')
   async createInvitation(): Promise<any> {
     return await this.credoService.createNewInvitation(this.agentId);
-  }
-
-  @Post('create-offer-oid4vc')
-  async createCredentialOffer(
-    @Body() offerdCredentials: string[]
-  ): Promise<any> {
-
-    return await this.credoService.createOID4VCCredentialOffer(this.agentId, offerdCredentials);
-  }
-
-  // requestAndStoreCredentials
-  @Post('resolve-credentials-oid4vc')
-  async resolveCredentials(
-    @Body() credentialsString: string
-  ): Promise<any> {
-    return await this.credoService.resolveCredentialOffer(this.agentId, credentialsString);
   }
 
   
